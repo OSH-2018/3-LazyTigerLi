@@ -7,8 +7,6 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <math.h>
-//#include <sys/stat.h>
-//#include <sys/types.h>
 struct inode
 {
 	int32_t inode_index;
@@ -29,8 +27,8 @@ struct block_group					//块组结构体
     void *data_block;				//数据块起始地址的指针
 };
 
-static const size_t size = 4 * 1024 * 1024 * (size_t)1024;			//文件系统空间总大小
-static const int block_size = 4096;									//每个块的大小为４KB
+static const size_t size = 4 * 1024 * 1024 * (size_t)1024;			//文件系统空间总大小4GB
+static const int block_size = 4096;									//每个块的大小为4KB
 static const int32_t block_number = (int32_t)1024 * 1024;				//总的块的个数
 static const int block_group_number = 32;								//32个块组
 static const int group_descriptor_addr = 0;							//块组描述符在一个块组中的相对位置（第几个块）
@@ -196,10 +194,6 @@ static int32_t isinodeIndexFull(int index[15])
     {
         if((index[i + 1] == -1 || index[i + 1] == 0) && (index[i] != -1 && index[i] != 0))
         {
-            /*index[i] = get_free_datablock();
-			//应该加一个空间不足的错误
-            memset(mem[index[i]],0,block_size);
-            return index[i];*/
             void *temp = mem[index[i]];
             int32_t data;
             memcpy(&data,temp + 31 * 128,4);
@@ -207,12 +201,14 @@ static int32_t isinodeIndexFull(int index[15])
             else
             {
             	index[i + 1] = get_free_datablock();
+            	if(index[i + 1] == -1)return ENOSPC;
             	memset(mem[index[i]],0,block_size);
             	return index[i + 1];
             }
         }
     }
     index[0] = get_free_datablock();
+    if(index[0] == -1)return ENOSPC;
     memset(mem[index[0]],0,block_size);
    	return index[0];
     
@@ -244,7 +240,6 @@ static void addItemInDirectory(void *dir,const char *filename,int32_t inode_inde
     int32_t datablock_index = isinodeIndexFull(index);
 	memcpy(dir + sizeof(struct stat),index,60);			//index应该写回去的，这是一个重大错误
 
-	//应该加一个空间不足的错误
     int32_t data[1024];
 	int32_t inode_index_temp = inode_index;
     memcpy(data,mem[datablock_index],block_size);
@@ -383,26 +378,26 @@ static int oshfs_mknod(const char *path, mode_t mode, dev_t dev)
     return 0;
 }
 
-static int oshfs_open(const char *path, struct fuse_file_info *fi)		//是否完整？？？
+static int oshfs_open(const char *path, struct fuse_file_info *fi)
 {
-	printf("open\n");
-  /*  int index[15];
-    memcpy(index,root + sizeof(stat),60);
-    void *temp;
-    char *tmp_name;
+	printf("open\n"); 
+  	int32_t index[15];
+    memcpy(index,root + sizeof(struct stat),60);
+    char *temp;
+    char tmp_name[124];
+    int32_t inode_index;
     for(int i = 0; i < 12; i++)
     {
-        temp = mem[index[i]];
+		if(index[i] == -1)continue;
+        temp = (char *)mem[index[i]];
         for(int j = 0; j < 32; j++)
-        {
+        {	
             memcpy(tmp_name,temp,124);
             if(strcmp(tmp_name,path + 1) == 0)return 0;
             temp += 128;
         }
     }
-    //unfinished!
-    return -1;*/
-	return 0;	
+    return -1;
 }
 
 static void unmap(int32_t datablock_index)
@@ -424,11 +419,6 @@ static void unmap(int32_t datablock_index)
    // printf("status %u\n",status[temp /8]);
     memcpy(block_group_pointer[block_group_index].group_bitmap + temp / 8,&status[temp / 8],1);
 	munmap(mem[datablock_index],block_size);
-	//char c;
-	//memcpy(&c,block_group_pointer[block_group_index].group_bitmap + temp / 8,1);
-	//printf("c %u\n",c);
-	
-	//printf("unmap finished\n");
 }
 
 static int oshfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
@@ -437,12 +427,6 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 	//printf("buf %s\n",buf);
     struct inode *node = get_filenode(path);
 	int32_t block_engaged = node->st->st_blocks;
-	//printf("inode_index %d\n",node->inode_index);
-	//printf("content ");
-	//for(int i = 0; i < 12; i++)printf("%d\t",node->content[i]);
-	//printf("\n");
-	//printf("path %s\n",path);
-	//printf("size %d\n",size);
 	printf("offset %d\n",offset);
 	//printf("block_engaged %d\n",block_engaged);
 	
@@ -460,12 +444,11 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 			if(block_index >= block_engaged)
 			{
 				node->content[block_index] = get_free_datablock();
+				if(node->content[block_index] == -1)return ENOSPC;
 				block_engaged++;
 				node->st->st_blocks = block_engaged;
 			}
 			memcpy(mem[node->content[block_index]],buf,(size > block_size) ? block_size : size);
-			//printf("%d block_engaged\n",block_engaged);
-			//printf("%d st_blocks\n",node->st->st_blocks);
 		}
 		printf("content ");
 	for(int i = 0; i < 12; i++)printf("%d\t",node->content[i]);
@@ -475,6 +458,7 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 	else if(offset < 48 * 1024 + 1024 * 4096)							//一级寻址
 	{
 		if(node->content[12] == -1 || node->content[12] == 0)node->content[12] = get_free_datablock();
+		if(node->content[12] == -1)return ENOSPC;
 		void *temp = mem[node->content[12]];
 		int block_index = offset / block_size;
 		int block_index_real;
@@ -491,6 +475,7 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 			if(block_index >= block_engaged)
 			{
 				block_index_real = get_free_datablock();
+				if(block_index_real == -1)return ENOSPC;
 				memcpy(temp + 4 * (block_index - 12),&block_index_real,4);
 				block_engaged++;
 				node->st->st_blocks = block_engaged;
@@ -512,6 +497,7 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 		if(block_index1_real == -1 || block_index1_real == 0)
 		{
 			block_index1_real = get_free_datablock();
+			if(block_index1_real == -1)return ENOSPC;
 			memcpy(temp + 4 * block_index1,&block_index1_real,4);
 		}
 	    void *temp1 = mem[block_index1_real];						//表示这个数据块的地址所在的数据块
@@ -520,6 +506,7 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 			if(block_index >= block_engaged)						//表明是追写，需要分配一个数据块
 			{
 				block_index_real = get_free_datablock();
+				if(block_index_real == -1)return ENOSPC;
 			//	printf("block_index_real %d\n",block_index_real);
 				memcpy(temp1 + 4 * ((block_index - 12) % 1024),&block_index_real,4);
 				block_engaged++;
@@ -535,9 +522,6 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 		}
 		printf("block_index_real %d\n",block_index_real);
 	}
-	
-	//调试时发现，写入文件的时候，一次最多写入4K，而非我想象的，创建一个几十兆的文件，一次就要写入几十兆，这导致这个函数中的
-	//block_needed变量始终为0，下面的循环不需要了，只需要根据offset的大小来处理多级寻址
 	
 	int32_t inode_index = node->inode_index;
 	memcpy(block_group_pointer[inode_index/inode_number].inode_table + (inode_index%inode_number) * inode_size,

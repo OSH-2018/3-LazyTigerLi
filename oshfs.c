@@ -46,10 +46,13 @@ static const int filenode_size = 128;									//文件节点的大小为128个�
 static void *mem[(int32_t)1024 * 1024];
 static struct block_group block_group_pointer[32];
 static void *root = NULL;												//指向根目录的inode所在的块
+//以上部分信息应该作为文件系统的信息存储于超级块中
+static void *super;													//超级块
 static struct inode *node;
 
 int32_t get_free_inode(int index)										//获取一块空闲的inode,返回其的相对位置
 {
+	printf("get_free_inode\n");
     int left;
     memcpy(&left,block_group_pointer[index].group_descriptor + sizeof(int),sizeof(int));
     if(left == 0)return -1;
@@ -78,6 +81,7 @@ int32_t get_free_inode(int index)										//获取一块空闲的inode,返回�
 
 int32_t get_free_datablock()				//获取一块空闲的数据块，返回其编号
 {
+	printf("get_free_datablock\n");
     for(int index = 0; index < block_group_number; index++)
     {
         int left;
@@ -112,6 +116,7 @@ int32_t get_free_datablock()				//获取一块空闲的数据块，返回其编�
 
 static struct inode *get_filenode(const char *name)		//根据文件路径，返回文件节点
 {
+	printf("get_filenode\n");
     int32_t index[15];
     memcpy(index,root + sizeof(struct stat),60);
     char *temp;
@@ -140,6 +145,7 @@ static struct inode *get_filenode(const char *name)		//根据文件路径，返�
 
 static void unmap(int32_t datablock_index)							//将编号为datablock_index的数据块释放掉
 {
+	printf("unmap\n");
     int block_group_index = datablock_index / block_number_of_group;
     int free_datablock;
     memcpy(&free_datablock,block_group_pointer[block_group_index].group_descriptor + sizeof(int),sizeof(int));
@@ -157,6 +163,7 @@ static void unmap(int32_t datablock_index)							//将编号为datablock_index�
 
 static struct inode *del_filenode(const char *name)		//根据文件路径，返回inode节点
 {
+	printf("del_filenode\n");
     int32_t index[15];
     memcpy(index,root + sizeof(struct stat),60);
     char *temp;
@@ -217,7 +224,8 @@ static struct inode *del_filenode(const char *name)		//根据文件路径，返�
 									{
 										memcpy(temp,temp1 + m * 128,128);
 										memset(temp1 + m * 128,0,128);
-										if(m == 0)							//如果该数据块就剩一个文件，则删除该块
+										if(m == 0)							
+										//如果该数据块就剩一个文件，则删除该块
 										{
 											unmap(index[k]);
 											index[k] == -1;
@@ -240,6 +248,7 @@ static struct inode *del_filenode(const char *name)		//根据文件路径，返�
 
 static int32_t isinodeIndexFull(int index[15])				//查看根目录节点对应的数据块是否还有空闲，即是否达到文件数量上限，返回数据块编号
 {
+	printf("isinodeindexfull\n");
     for(int i = 0; i < 12; i++)
     {
         if((index[i + 1] == -1 || index[i + 1] == 0) && (index[i] != -1 && index[i] != 0))
@@ -265,6 +274,7 @@ static int32_t isinodeIndexFull(int index[15])				//查看根目录节点对应�
 
 static void addItemInDirectory(void *dir,const char *filename,int32_t inode_index)		//在目录对应的数据块中添加新的文件节点
 {
+	printf("addItemInDirectory\n");
     int index[15];
     memcpy(index,dir + sizeof(struct stat),60);
 
@@ -287,6 +297,7 @@ static void addItemInDirectory(void *dir,const char *filename,int32_t inode_inde
 
 static void create_filenode(const char *filename,struct stat *st)
 {
+	printf("create_filenode\n");
     int32_t inode_index;
     int index = 0;
     for(index = 0; index < block_number_of_group; index++)
@@ -303,6 +314,7 @@ static void create_filenode(const char *filename,struct stat *st)
 
 static void *oshfs_init(struct fuse_conn_info *conn)			//相当于格式化
 {
+	printf("init\n");
     for(int i = 0; i < block_group_number; i++)
     {
         mem[i * block_number_of_group] = mmap(NULL,block_size,PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -335,11 +347,23 @@ static void *oshfs_init(struct fuse_conn_info *conn)			//相当于格式化
     node = (struct inode*)malloc(sizeof(struct inode));
     node->st = (struct stat*)malloc(sizeof(struct stat));
     memset(block_group_pointer[i].inode_table + index * inode_size + sizeof(struct stat),-1,inode_size - sizeof(struct stat));
-    return NULL;					//将block_group_pointer中的一些指针指向已分配的空间，便于操作
+    
+    //构建超级块
+    super = mmap(NULL,block_size,PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    memcpy(super,&size,4);
+    memcpy(super + 4,&block_size,4);
+  	memcpy(super + 8,&block_number,4);
+  	memcpy(super + 12,&block_group_number,4);
+  	memcpy(super + 16,&block_number_of_group,4);
+	for(int i = 0; i < 32; i++)
+		memcpy(super + 16 + 4 * i,mem[i * block_number_of_group],4);			
+  	memcpy(super + 140,root,4);
+    return NULL;
 }
 
 static int oshfs_getattr(const char *path, struct stat *stbuf)		//获取文件属性
 {
+	printf("getattr\n");
     int ret = 0;
     struct inode *nd = get_filenode(path);
     if(strcmp(path, "/") == 0)
@@ -360,6 +384,7 @@ static int oshfs_getattr(const char *path, struct stat *stbuf)		//获取文件�
 
 static int oshfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi)	//显示当前目录下的文件
 {
+	printf("readdir\n");
     filler(buf, ".", NULL, 0);
     filler(buf, "..", NULL, 0);
     int index[15];
@@ -387,6 +412,7 @@ static int oshfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, of
 
 static int oshfs_mknod(const char *path, mode_t mode, dev_t dev)
 {
+	printf("mknod\n");
     struct stat st;
     st.st_mode = S_IFREG | 0644;
     st.st_uid = fuse_get_context()->uid;		//文件所有者
@@ -401,6 +427,7 @@ static int oshfs_mknod(const char *path, mode_t mode, dev_t dev)
 
 static int oshfs_open(const char *path, struct fuse_file_info *fi)
 {
+	printf("open\n");
   	int32_t index[15];
     memcpy(index,root + sizeof(struct stat),60);
     char *temp;
@@ -422,6 +449,8 @@ static int oshfs_open(const char *path, struct fuse_file_info *fi)
 
 static int oshfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
+	printf("write\toffset %d\tsize %d\t\n",offset,size);
+	printf("buf %s\n",buf);
     struct inode *nd = get_filenode(path);
 	int32_t block_engaged = nd->st->st_blocks;
 	
@@ -432,7 +461,7 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 	{
 		int block_index = offset / block_size;
 		if(offset % block_size != 0)
-		memcpy(mem[nd->content[block_engaged - 1 ]] + offset % block_size,buf,
+		memcpy(mem[nd->content[block_index]] + offset % block_size,buf,
 			(size > block_size - offset % block_size) ? (block_size - offset % block_size) : size);
 		else
 		{
@@ -519,6 +548,7 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 
 static int oshfs_truncate(const char *path, off_t size)
 {
+	printf("truncate size %d\n",size);
     struct inode *nd = get_filenode(path);
     int32_t block_engaged = (nd->st->st_size + 4095) / 4096;					//该文件占用的块的数量
     nd->st->st_size = size;
@@ -553,7 +583,7 @@ static int oshfs_truncate(const char *path, off_t size)
     	void *temp1 = mem[nd->content[13]];
     	int start1 = (block_left > 1036) ? (block_left - 1036) / 1024 : 0;		//要删除的第一个块的地址所在的块是第几个
     	int start2 = (block_left > 1036) ? (block_left - 1036) % 1024 : 0;		//要删除的第一个块的地址在相应的索引块中的相对位置
-    	for(int i = start1; i < 1024; i++)
+    	for(int i = start1; i < 1024 && nd->st->st_blocks > block_left; i++)
     	{
     		int32_t block_index1;
     		memcpy(&block_index1,temp1 + 4 * i,4);
@@ -562,7 +592,7 @@ static int oshfs_truncate(const char *path, off_t size)
     		int32_t block_index2;
     		int j = 0;
     		if(i == start1)j = start2;
-    		while(j < 1024)
+    		while(j < 1024 && nd->st->st_blocks > block_left)
 			{
 				memcpy(&block_index2,temp2 + 4 * j,4);
 				if(block_index2 == 0 || block_index2 == -1)break;
@@ -588,6 +618,7 @@ static int oshfs_truncate(const char *path, off_t size)
 
 static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
+	printf("read\n");
     struct inode *nd = get_filenode(path);
     int ret = size;
     if(offset + size > nd->st->st_size)
@@ -597,29 +628,30 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
     int32_t block_read = 0;
     for(int i = start_block; i < 12 && i < end_block; i++)
     {
-    	if(i == end_block - 1)memcpy(buf + block_size * block_read,mem[nd->content[i]],(ret % block_size == 0 && ret != 0) ? block_size : ret % block_size);
+    	if(i == end_block - 1)memcpy(buf + block_size * block_read,mem[nd->content[i]],
+				(ret % block_size == 0 && ret != 0) ? block_size : ret % block_size);
     	else memcpy(buf + block_size * block_read,mem[nd->content[i]],block_size);
     	block_read++;
     }
     if(end_block > 12 && start_block < 1036)												//一级寻址
     {
     	void *temp = mem[nd->content[12]];
-		int32_t block_index = (start_block >= 12) ? offset / block_size : 12;			//从第几个数据块开始读
-		int32_t block_index_real;
-		int i = 0;
-		while(block_read < end_block - start_block)
-		{
-			if(i == 1024 - (block_index - 12))break;
-			memcpy(&block_index_real,temp + 4 * (block_index - 12),4);
-			int byte_read;
-			if(block_read == end_block - start_block - 1)
-			memcpy(buf + block_size * block_read,mem[block_index_real],(ret % block_size == 0 && ret != 0) ? block_size : ret % block_size);
+	int32_t block_index = (start_block >= 12) ? offset / block_size : 12;			//从第几个数据块开始读
+	int32_t block_index_real;
+	int i = 0;
+	while(block_read < end_block - start_block)
+	{
+		if(i == 1024 - (block_index - 12))break;
+		memcpy(&block_index_real,temp + 4 * (block_index - 12),4);
+		int byte_read;
+		if(block_read == end_block - start_block - 1)
+		memcpy(buf + block_size * block_read,mem[block_index_real],(ret % block_size == 0 && ret != 0) ? block_size : ret % block_size);
 			//读取字节大小设为ret % block_size应该是错的,这个bug找了一个晚上
-			else memcpy(buf + block_size * block_read,mem[block_index_real],block_size);
-			temp += 4;
-			block_read++;
-			i++;
-		}
+		else memcpy(buf + block_size * block_read,mem[block_index_real],block_size);
+		temp += 4;
+		block_read++;
+		i++;
+	}
 	}
 	if(end_block > 1036)														//二级寻址
 	{
@@ -655,6 +687,7 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
 
 static int oshfs_unlink(const char *path)
 {
+	printf("unlink\n");
     struct inode *nd = del_filenode(path);
     int32_t block_to_del = nd->st->st_blocks;
     for(int i = 0; i < 12; i++)
